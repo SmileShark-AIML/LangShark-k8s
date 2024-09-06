@@ -1,0 +1,48 @@
+import Header from "@/src/components/layouts/header";
+
+import { useRouter } from "next/router";
+import ModelTable from "@/src/components/table/use-cases/models";
+import { Button } from "@/src/components/ui/button";
+import { useHasProjectAccess } from "@/src/features/rbac/utils/checkProjectAccess";
+import { Lock } from "lucide-react";
+import Link from "next/link";
+import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
+import { FullScreenPage } from "@/src/components/layouts/full-screen-page";
+
+export default function ModelsPage() {
+  const router = useRouter();
+  const projectId = router.query.projectId as string;
+  const hasWriteAccess = useHasProjectAccess({
+    projectId,
+    scope: "models:CUD",
+  });
+  const capture = usePostHogClientCapture();
+  return (
+    <FullScreenPage>
+      <Header
+        title="모델"
+        // help={{
+        //   description:
+        //     "A model represents a LLM model. It is used to calculate tokens and cost.",
+        //   href: "https://langfuse.com/docs/model-usage-and-cost",
+        // }}
+        actionButtons={
+          <Button
+            variant="secondary"
+            disabled={!hasWriteAccess}
+            onClick={() => capture("models:new_form_open")}
+            asChild
+          >
+            <Link
+              href={hasWriteAccess ? `/project/${projectId}/models/new` : "#"}
+            >
+              {!hasWriteAccess && <Lock size={16} className="mr-2" />}
+              커스텀 모델 추가
+            </Link>
+          </Button>
+        }
+      />
+      <ModelTable projectId={projectId} />
+    </FullScreenPage>
+  );
+}

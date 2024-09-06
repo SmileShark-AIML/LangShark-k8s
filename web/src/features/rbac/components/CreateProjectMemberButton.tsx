@@ -1,0 +1,244 @@
+import { Button } from "@/src/components/ui/button";
+import { api } from "@/src/utils/api";
+import { useState } from "react";
+import { PlusIcon } from "lucide-react";
+import * as z from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/src/components/ui/dialog";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/src/components/ui/form";
+import {
+  Select,
+  SelectContent,
+  SelectTrigger,
+  SelectValue,
+} from "@/src/components/ui/select";
+import { Input } from "@/src/components/ui/input";
+import { Role } from "@langfuse/shared";
+import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
+import { useHasOrganizationAccess } from "@/src/features/rbac/utils/checkOrganizationAccess";
+import { useHasOrgEntitlement } from "@/src/features/entitlements/hooks";
+import { useHasProjectAccess } from "@/src/features/rbac/utils/checkProjectAccess";
+import { RoleSelectItem } from "@/src/features/rbac/components/RoleSelectItem";
+
+const formSchema = z.object({
+  email: z.string().trim().email(),
+  orgRole: z.nativeEnum(Role),
+  projectRole: z.nativeEnum(Role),
+});
+
+export function CreateProjectMemberButton(props: {
+  orgId: string;
+  project?: { id: string; name: string };
+}) {
+  const capture = usePostHogClientCapture();
+  const [open, setOpen] = useState(false);
+  const hasOrgAccess = useHasOrganizationAccess({
+    organizationId: props.orgId,
+    scope: "organizationMembers:CUD",
+  });
+  const hasProjectAccess = useHasProjectAccess({
+    projectId: props.project?.id,
+    scope: "projectMembers:CUD",
+  });
+  const hasProjectRoleEntitlement = useHasOrgEntitlement("rbac-project-roles");
+  const hasOnlySingleProjectAccess =
+    !hasOrgAccess && hasProjectAccess && hasProjectRoleEntitlement;
+
+  const utils = api.useUtils();
+  const mutCreateProjectMember = api.members.create.useMutation({
+    onSuccess: () => utils.members.invalidate(),
+    onError: (error) =>
+      form.setError("email", {
+        type: "manual",
+        message: error.message,
+      }),
+  });
+
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      email: "",
+      orgRole: hasOnlySingleProjectAccess ? Role.NONE : Role.MEMBER,
+      projectRole: hasOnlySingleProjectAccess ? Role.MEMBER : Role.NONE,
+    },
+  });
+
+  function onSubmit(values: z.infer<typeof formSchema>) {
+    capture(
+      props.project
+        ? "project_settings:send_membership_invitation"
+        : "organization_settings:send_membership_invitation",
+      {
+        orgRole: values.orgRole,
+        projectRole: values.projectRole,
+      },
+    );
+    return mutCreateProjectMember
+      .mutateAsync({
+        orgId: props.orgId,
+        email: values.email,
+        orgRole: values.orgRole,
+        //optional
+        projectId: props.project?.id,
+        projectRole:
+          values.projectRole === Role.NONE ? undefined : values.projectRole,
+      })
+      .then(() => {
+        form.reset();
+        setOpen(false);
+      })
+      .catch((error) => {
+        console.error(error);
+      });
+  }
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button
+            variant="secondary"
+            loading={mutCreateProjectMember.isLoading}
+            disabled={!hasOrgAccess && !hasOnlySingleProjectAccess}
+          >
+            <PlusIcon className="-ml-0.5 mr-1.5 h-5 w-5" aria-hidden="true" />
+            {hasOnlySingleProjectAccess
+              ? "프로젝트 멤버 추가"
+              : "새로운 멤버 추가"}
+          </Button>
+        </DialogTrigger>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              새로운 멤버를{" "}
+              {hasOnlySingleProjectAccess ? "프로젝트" : "조직"}
+              에 추가합니다.
+            </DialogTitle>
+          </DialogHeader>
+          <Form {...form}>
+            <form
+              className="space-y-6"
+              // eslint-disable-next-line @typescript-eslint/no-misused-promises
+              onSubmit={form.handleSubmit(onSubmit)}
+            >
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>이메일</FormLabel>
+                    <FormControl>
+                      <Input placeholder="langshark@example.com" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              {!hasOnlySingleProjectAccess && (
+                <FormField
+                  control={form.control}
+                  name="orgRole"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>조직 롤</FormLabel>
+                      <Select
+                        defaultValue={field.value}
+                        onValueChange={(value) =>
+                          field.onChange(
+                            value as (typeof Role)[keyof typeof Role],
+                          )
+                        }
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select an organization role" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {Object.values(Role).map((role) => (
+                            <RoleSelectItem role={role} key={role} />
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+              {props.project !== undefined && hasProjectRoleEntitlement && (
+                <FormField
+                  control={form.control}
+                  name="projectRole"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Project Role</FormLabel>
+                      <Select
+                        defaultValue={field.value}
+                        onValueChange={(value) =>
+                          field.onChange(
+                            value as (typeof Role)[keyof typeof Role],
+                          )
+                        }
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a project role" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {Object.values(Role)
+                            .filter(
+                              (role) =>
+                                !hasOnlySingleProjectAccess ||
+                                role !== Role.NONE,
+                            )
+                            .map((role) => (
+                              <RoleSelectItem
+                                role={role}
+                                key={role}
+                                isProjectRole
+                              />
+                            ))}
+                        </SelectContent>
+                      </Select>
+                      {!hasOnlySingleProjectAccess && (
+                        <FormDescription>
+                          This project role will override the default role for
+                          this current project ({props.project!.name}).
+                        </FormDescription>
+                      )}
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+              <Button
+                type="submit"
+                className="w-full"
+                loading={form.formState.isSubmitting}
+              >
+                접근 부여
+              </Button>
+              <FormMessage />
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
